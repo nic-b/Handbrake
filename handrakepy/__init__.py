@@ -2,6 +2,9 @@ import os
 import shutil
 import subprocess
 import sys
+import argparse
+import ctypes
+import platform
 
 
 def sizeof_fmt(num, suffix='B'):
@@ -12,7 +15,35 @@ def sizeof_fmt(num, suffix='B'):
     return "%.1f%s%s" % (num, 'Yi', suffix)
 
 
+def check_disk_space_vs_file(path, file_to_pull):
+
+    if platform.system() == 'Windows':
+        free_bytes = ctypes.c_ulonglong(0)
+        ctypes.windll.kernel32.GetDiskFreeSpaceExW(ctypes.c_wchar_p(path), None, None, ctypes.pointer(free_bytes))
+        st = free_bytes.value
+    else:
+        st = os.statvfs(path)
+
+    remote_size = os.path.getsize(file_to_pull)
+    print "Space free locally:", sizeof_fmt(st)
+    print ""
+
+    if remote_size * 2 > st:
+        print " Not enough free space to process file of size", sizeof_fmt(remote_size)
+        return False
+    else:
+        return True
+
+
 def init():
+    parser = argparse.ArgumentParser(description='Convert MKV files tp MP4.')
+    parser.add_argument('--scan', action='store_true',
+                        help='True/False: Only scan files and do not convert')
+    parser.add_argument('--noscan', action='store_false',
+                        help='True/False: Only scan files and do not convert')
+    global args
+    args = parser.parse_args()
+
     if not os.path.exists(local_location):
         print "Local working dir", local_location, " does not exist  - creating"
         os.makedirs(local_location)
@@ -57,11 +88,13 @@ def convert_file(local_file):
         sys.exit(-1)
 
 
-#remote_location = "z:\\Media\\tmp\\"
-remote_location = "z:\\tmp\\"
+global args
+remote_location = "z:\\Media\\TV"
+#remote_location = "z:\\Media\\Films"
 local_location = "d:\\videos\\brake\\"
 extension = '.mkv'
 file_names = []
+total_filesize_to_convert = 0.0
 exception_files = ['District.9.2009.720p.BrRip.YIFY.mkv',
                    'Argo.mkv',
                    'The Big Lebowski.mkv']
@@ -69,25 +102,36 @@ exception_files = ['District.9.2009.720p.BrRip.YIFY.mkv',
 init()
 
 
-for root, dirs, files in os.walk(remote_location):
+for root, dirs, files in os.walk(unicode(remote_location)):
     for name in files:
         if name not in exception_files:
             if name.endswith(extension):
                 file_names.append((os.path.join(root, name)))
+                total_filesize_to_convert += os.path.getsize(root+"\\"+name)
 
 
 print "Found", file_names.__len__(), "mkv file(s) to convert"
 print file_names
+print "Total filesize is", sizeof_fmt(total_filesize_to_convert)
+
+if args.scan:
+    sys.exit(1)
 
 
 for file_to_copy in file_names:
     local_file_mkv = os.path.basename(file_to_copy)
     remote_file_dir = os.path.dirname(file_to_copy)
-    # Copy the file locally
-    copy_file(file_to_copy, local_location)
-    # Convert the file
-    converted_file = convert_file(local_file_mkv)
-    # remove the remote file (backup is locally anyway)
-    remove_file(file_to_copy)
-    # copy up new file from whence it came
-    copy_file(converted_file, remote_file_dir)
+    
+    if check_disk_space_vs_file(local_location, file_to_copy):
+        # Copy the file locally
+        copy_file(file_to_copy, local_location)
+        # Convert the file
+        converted_file = convert_file(local_file_mkv)
+        # remove the remote file (backup is locally anyway)
+        remove_file(file_to_copy)
+        # copy up new file from whence it came
+        copy_file(converted_file, remote_file_dir)
+        # now remove the new file locally to save space
+        remove_file(converted_file)
+    else:
+        sys.exit(-1)
